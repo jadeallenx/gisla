@@ -1,16 +1,11 @@
 {application, gisla,
- [{description, "Sagas for Erlang"}
- ,{vsn, "0.1"}
- ,{registered, []}
- ,{applications,
-   [kernel
-   ,stdlib
-   ,hut
-   ]}
- ,{env,[]}
- ,{modules, []}
- 
- ,{maintainers,, ["Mark Allen"]}
- ,{licenses, ["MIT"]}
- ,{links, [{"Github", "https://github.com/mrallen1/gisla"}]}
+ [{description, "Sagas for Erlang"},
+  {vsn, "0.1"},
+  {registered, []},
+  {applications, [kernel, stdlib, hut ]},
+  {env,[]},
+  {modules, []},
+  {maintainers, ["Mark Allen"]},
+  {licenses, ["MIT"]},
+  {links, [{"Github", "https://github.com/mrallen1/gisla"}]}
  ]}.
