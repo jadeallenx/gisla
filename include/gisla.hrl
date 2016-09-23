@@ -1,8 +1,8 @@
 % gisla.hrl
 
 -type stage_func() :: mfa() | function().
--type func_state() :: 'ready' | 'running' | 'complete'.
--type execution_status() :: 'success' | 'failure'.
+-type func_state() :: 'ready' | 'complete'.
+-type execution_status() :: 'success' | 'failed'.
 
 -record(sfunc, {
               f           :: stage_func(),
@@ -26,7 +26,6 @@
 -record(flow, {
           name          :: gisla_name(),
      pipeline = []      :: pipeline(),
-    direction = forward :: flow_direction(),
-          state         :: term()
+    direction = forward :: flow_direction()
 }).
 

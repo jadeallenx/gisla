@@ -8,24 +8,25 @@
 -module(gisla).
 -include("gisla.hrl").
 
--define(log(X,Y,Z), ok).
--define(log(X,Y), ok).
-%-include_lib("hut/include/hut.hrl").
+-include_lib("hut/include/hut.hrl").
 
 -export([
      new_flow/0,
      new_flow/2,
-     new_stage/0,
-     new_sfunc/0,
      name_flow/2,
-     make_stage/3,
-     make_sfunc/1,
-     make_sfunc/2,
-     add_stage/2,
-     delete_stage/2,
      describe_flow/1,
+     new_stage/0,
+     new_stage/3,
+     delete_stage/2,
+     add_stage/2,
+     new_sfunc/0,
+     new_sfunc/1,
+     new_sfunc/2,
+     update_sfunc_timeout/2,
      execute/2
 ]).
+
+%% Flows
 
 new_flow() ->
     #flow{}.
@@ -41,34 +42,25 @@ new_flow(Name, Flow) when is_list(Flow)
        pipeline = Flow
     }.
 
-new_stage() ->
-    #stage{}.
-
-new_sfunc() ->
-    #sfunc{}.
-
 name_flow(Name, Flow = #flow{}) ->
     true = is_valid_name(Name),
     Flow#flow{ name = Name }.
 
-make_stage(Name, F, R) when ( is_function(F) orelse is_tuple(F) ) 
-                    andalso ( is_function(R) orelse is_tuple(R) ) ->
-    make_stage(Name, make_sfunc(F), make_sfunc(R));
+describe_flow(#flow{ name = N, pipeline = P }) ->
+    {N, [ S#stage.name || S <- P ]}.
 
-make_stage(Name, F, R) ->
+%% Stages
+
+new_stage() ->
+    #stage{}.
+
+new_stage(Name, F = #sfunc{}, R = #sfunc{}) ->
     true = is_valid_name(Name),
     true = validate_stage_func(F),
     true = validate_stage_func(R),
-    #stage{ name = Name, forward = F, rollback = R }.
-
-make_sfunc(F) ->
-   make_sfunc(F, 5000).
-
-make_sfunc(F, Timeout) ->
-   true = validate_function(F),
-   #sfunc{ f = F, timeout = Timeout }.
-
-
+    #stage{ name = Name, forward = F, rollback = R };
+new_stage(Name, F, R) ->
+    new_stage(Name, new_sfunc(F), new_sfunc(R)).
 
 add_stage(E = #stage{}, Flow = #flow{ pipeline = P }) ->
     true = validate_stage(E),
@@ -81,10 +73,23 @@ delete_stage(Name, Flow = #flow{ pipeline = P }) ->
     NewPipeline = lists:keydelete(Name, #stage.name, P),
     Flow#flow{ pipeline = NewPipeline }.
 
-describe_flow(#flow{ name = N, pipeline = P }) ->
-    {N, [ S#stage.name || S <- P ]}.
+%% sfunc
 
+new_sfunc() ->
+    #sfunc{}.
 
+new_sfunc(F) ->
+   new_sfunc(F, 5000).
+
+new_sfunc(F, Timeout) ->
+   true = validate_function(F),
+   #sfunc{ f = F, timeout = Timeout }.
+
+update_sfunc_timeout(T, S = #sfunc{}) when is_integer(T) 
+                                           andalso T >= 0 ->
+   S#sfunc{ timeout = T }.
+
+%% execute
 
 execute(F = #flow{ name = N, pipeline = P }, State) ->
     ?log(info, "Starting flow ~p", [N]),
@@ -93,18 +98,22 @@ execute(F = #flow{ name = N, pipeline = P }, State) ->
 %% Private functions
 
 %% XXX need to mark stage state - defined, running, complete, rollback, failed
-do_pipeline([], Flow, State) -> Flow#flow{ state = State };
+do_pipeline([], F = #flow{ direction = forward }, State) -> 
+    {ok, F, purge_meta_keys(State)};
+do_pipeline([], F = #flow{ direction = rollback }, State) -> 
+    {rollback, F, purge_meta_keys(State)};
 do_pipeline([H|T], F = #flow{ pipeline = P, direction = D }, State) ->
     {Tail, NewFlow, NewState} = case execute_stage_function(H, State, D) of
-    {ok, State0} ->
-        {T, F, State0};
-    {failed, State1} ->
+    {ok, NewStage0, State0} ->
+        {T, update_flow(F, NewStage0), State0};
+    {failed, NewStage1, State1} ->
         case D of
         forward ->
             Name = H#stage.name,
             ReversePipeline = lists:reverse(P),
             NewTail = lists:dropwhile( fun(E) -> E#stage.name /= Name end, ReversePipeline ),
-            {NewTail, F#flow{ direction = rollback }, State1};
+	    UpdatedFlow = update_flow(F#flow{ direction = rollback}, NewStage1),
+            {NewTail, UpdatedFlow, State1};
         rollback ->
             ?log(error, "Error during rollback. Giving up."),
             error(failed_rollback)
@@ -112,22 +121,36 @@ do_pipeline([H|T], F = #flow{ pipeline = P, direction = D }, State) ->
     end,
     do_pipeline(Tail, NewFlow, NewState).
 
-execute_stage_function(#stage{ name = N, rollback = R }, State, rollback) ->
-    do_stage(N, R, State);
-execute_stage_function(#stage{ name = N, forward = F }, State, forward) ->
-    do_stage(N, F, State).
+update_flow(F = #flow{ pipeline = P }, Stage = #stage{ name = N }) ->
+    NewPipeline = lists:keyreplace(N, #stage.name, P, Stage),
+    F#flow{ pipeline = NewPipeline }.
+
+execute_stage_function(S = #stage{ name = N, rollback = R }, State, rollback) ->
+    update_stage(S, rollback, do_stage(N, R, State));
+execute_stage_function(S = #stage{ name = N, forward = F }, State, forward) ->
+    update_stage(S, forward, do_stage(N, F, State)).
+
+update_stage(Stage, rollback, {Reply, Func, State}) ->
+    {Reply, Stage#stage{ rollback = Func }, State};
+update_stage(Stage, forward, {Reply, Func, State}) ->
+    {Reply, Stage#stage{ forward = Func }, State}.
 
 do_stage(Name, Func, State) ->
     {F, Timeout} = make_closure(Func, self(), State),
-    {Mref, Pid} = spawn_monitor(fun() -> F() end),
+    {Pid, Mref} = spawn_monitor(fun() -> F() end),
     ?log(info, "Started pid ~p to execute stage ~p", [Pid, Name]),
-    loop(Mref, Pid, Timeout, State, false).
+    handle_loop_return(loop(Mref, Pid, Timeout, State, false), Func).
+
+handle_loop_return({ok, Reason, State}, Func) ->
+    {ok, Func#sfunc{ state = complete, status = success, reason = Reason }, State};
+handle_loop_return({failed, Reason, State}, Func) ->
+    {failed, Func#sfunc{ state = complete, status = failed, reason = Reason }, State}.
 
 loop(Mref, Pid, Timeout, State, NormalExitRcvd) ->
     receive
         race_conditions_are_bad_mmmkay ->
             ?log(debug, "Normal exit received, with no failure messages out of order."),
-            {ok, State};
+            {ok, normal, State};
         {complete, NewState} ->
             ?log(info, "Stage sent complete..."),
             demonitor(Mref, [flush]), %% prevent us from getting any spurious failures and clean out our mailbox
@@ -143,7 +166,7 @@ loop(Mref, Pid, Timeout, State, NormalExitRcvd) ->
         {'DOWN', Mref, process, Pid, Reason} ->
             %% We crashed for some reason
             ?log(error, "Pid ~p failed because ~p", [Pid, Reason]),
-            {failed, State};
+            {failed, Reason, State};
         Msg ->
             ?log(warning, "Some rando message just showed up! ~p Ignoring.", [Msg]),
             loop(Mref, Pid, Timeout, State, NormalExitRcvd)
@@ -151,10 +174,10 @@ loop(Mref, Pid, Timeout, State, NormalExitRcvd) ->
         case NormalExitRcvd of
             false ->
                 ?log(error, "Pid ~p timed out after ~p milliseconds", [Pid, Timeout]),
-                {failed, State};
+                {failed, timeout, State};
             true ->
                 ?log(info, "We exited cleanly but timed out... *NOT* treating as a failure.", []),
-                {ok, State}
+                {ok, timeout, State}
         end
    end.
 
@@ -164,8 +187,18 @@ make_closure(#sfunc{ f = {M, F, A}, timeout = T }, ReplyPid, State) ->
 make_closure(#sfunc{ f = F, timeout = T }, ReplyPid, State) when is_function(F) ->
    {fun() -> ReplyPid ! {complete, F(inject_meta_state({gisla_reply, ReplyPid}, State))} end, T}.
 
-inject_meta_state(Meta, State) ->
-    lists:flatten([ Meta | State ]).
+inject_meta_state(Meta = {K, _V}, State) ->
+    case lists:keyfind(K, 1, State) of
+       false -> 
+	  [ Meta | State ];
+       _ -> State
+    end.
+
+purge_meta_keys(State) ->
+    lists:foldl(fun remove_meta/2, State, [gisla_reply]).
+
+remove_meta(K, State) ->
+    lists:keydelete(K, 1, State).
 
 validate_pipeline(Pipeline) when is_list(Pipeline) ->
     lists:all(fun validate_stage/1, Pipeline);
@@ -183,8 +216,8 @@ validate_stage_func(_) -> false.
 
 validate_function(E) when is_function(E) -> true;
 validate_function({M, F, A}) when is_atom(M)
-                                             andalso is_atom(F)
-                                             andalso is_list(A) -> true;
+                                  andalso is_atom(F)
+                                  andalso is_list(A) -> true;
 validate_function(_) -> false.
 
 is_valid_name(N) ->
@@ -219,9 +252,29 @@ validate_function_test_() ->
       ?_assertEqual(false, validate_function(42))
     ].
 
+new_sfunc_test_() ->
+   F = fun(E) -> E end,
+   S = #sfunc{},
+   S1 = S#sfunc{ f = F },
+   S2 = S#sfunc{ f = F, timeout = 100 },
+   [
+     ?_assertEqual(S1, new_sfunc(F)),
+     ?_assertEqual(S2, update_sfunc_timeout(100, new_sfunc(F)))
+   ].
+
+new_stage_test_() ->
+   F = fun(E) -> E end,
+   MFA = {?MODULE, test_function, []},
+   SF = new_sfunc(F),
+   SMFA = new_sfunc(MFA),
+   [
+      ?_assertEqual(#stage{ name = test, forward = SF, rollback = SMFA }, new_stage(test, F, MFA)),
+      ?_assertEqual(#stage{ name = test, forward = SMFA,  rollback = SF }, new_stage(test, MFA, F))
+   ].
+
 validate_pipeline_test_() ->
-    F = fun(E) -> E, ok end,
-    G = {?MODULE, test_function, [test]},
+    F = new_sfunc(fun(E) -> E, ok end),
+    G = new_sfunc({?MODULE, test_function, [test]}),
     TestStage1 = #stage{ name = test1, forward = F, rollback = G },
     TestStage2 = #stage{ name = test2, forward = G, rollback = F },
     TestPipeline = [ TestStage1, TestStage2 ],
@@ -231,34 +284,24 @@ validate_pipeline_test_() ->
       ?_assertEqual(false, validate_pipeline(BadPipeline))
     ].
 
-make_stage_test_() ->
-   F = fun(E) -> E end,
-   MFA = {?MODULE, test_function, []},
-
-   [
-      ?_assertEqual(#stage{ name = test, forward = #sfunc{}, rollback = #sfunc{} }, make_stage(test, F, MFA)),
-      ?_assertEqual(#stage{ name = test, forward = #sfunc{},  rollback = #sfunc{} }, make_stage(test, MFA, F))
-   ].
-
 new_test_() ->
    F = fun(E) -> E end,
    G = fun(X) -> X end,
-   TestStage1 = make_stage(test, F, G),
-   TestStage2 = make_stage(bar, F, G),
-   TestFlow = new_flow(baz, [TestStage1, TestStage2]),
+   TestStage1 = new_stage(test, F, G),
+   TestStage2 = new_stage(bar, F, G),
    [
       ?_assertEqual(#flow{}, new_flow()),
       ?_assertEqual(#stage{}, new_stage()),
+      ?_assertEqual(#sfunc{}, new_sfunc()),
       ?_assertEqual(#flow{ name = test }, name_flow(test, new_flow())),
       ?_assertEqual(#flow{ name = baz, pipeline = [ TestStage1, TestStage2 ] }, new_flow(baz, [ TestStage1, TestStage2 ]))
    ].
 
-
 mod_pipeline_test_() ->
    F = fun(E) -> E end,
    G = fun(X) -> X end,
-   TestStage1 = make_stage(test, F, G),
-   TestStage2 = make_stage(bar, F, G),
+   TestStage1 = new_stage(test, F, G),
+   TestStage2 = new_stage(bar, F, G),
 
    [
       ?_assertEqual(#flow{ pipeline = [ TestStage1 ] }, add_stage(TestStage1, new_flow())),
@@ -268,12 +311,40 @@ mod_pipeline_test_() ->
 describe_flow_test_() ->
    F = fun(E) -> E end,
    G = fun(X) -> X end,
-   TestStage1 = make_stage(stage1, F, G),
-   TestStage2 = make_stage(stage2, F, G),
+   TestStage1 = new_stage(stage1, F, G),
+   TestStage2 = new_stage(stage2, F, G),
    TestFlow = new_flow(test, [ TestStage1, TestStage2 ]),
    [
       ?_assertEqual({ test, [stage1, stage2] }, describe_flow(TestFlow))
    ].
+
+store_purge_meta_keys_test() ->
+   Key = gisla_reply,
+   State = [{Key, self()}],
+
+   ?assertEqual([], purge_meta_keys(State)).
+
+
+
+stage1(State) -> [ {stage1, true} | State ].
+stage1_rollback(State) -> lists:keydelete(stage1, 1, State).
+
+stage2(State) -> [ {stage2, true} | State ].
+stage2_rollback(State) -> lists:keydelete(stage2, 1, State).
+
+blowup(_State) -> error(blowup).
+blowup_rollback(State) -> [ {blowup_rollback, true} | State ].
+
+execute_forward_test() ->
+   S1 = new_stage(stage1, fun stage1/1, fun stage1_rollback/1),
+   S2 = new_stage(stage2, fun stage2/1, fun stage2_rollback/1),
+   Flow = new_flow(test, [ S1, S2 ]),
+   SortedState = lists:sort([{stage1, true}, {stage2, true}]),
+   {ok, F, State} = execute(Flow, []),
+   ?assertEqual(SortedState, lists:sort(State)),
+   ?assertEqual([{complete, success}, {complete, success}], 
+		   [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.status} 
+		    || S <- F#flow.pipeline]).
 
 
 
