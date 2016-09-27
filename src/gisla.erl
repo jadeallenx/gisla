@@ -142,9 +142,9 @@ do_stage(Name, Func, State) ->
     handle_loop_return(loop(Mref, Pid, Timeout, State, false), Func).
 
 handle_loop_return({ok, Reason, State}, Func) ->
-    {ok, Func#sfunc{ state = complete, status = success, reason = Reason }, State};
+    {ok, Func#sfunc{ state = complete, result = success, reason = Reason }, State};
 handle_loop_return({failed, Reason, State}, Func) ->
-    {failed, Func#sfunc{ state = complete, status = failed, reason = Reason }, State}.
+    {failed, Func#sfunc{ state = complete, result = failed, reason = Reason }, State}.
 
 loop(Mref, Pid, Timeout, State, NormalExitRcvd) ->
     receive
@@ -189,8 +189,8 @@ make_closure(#sfunc{ f = F, timeout = T }, ReplyPid, State) when is_function(F) 
 
 inject_meta_state(Meta = {K, _V}, State) ->
     case lists:keyfind(K, 1, State) of
-       false -> 
-	  [ Meta | State ];
+       false ->
+            [ Meta | State ];
        _ -> State
     end.
 
@@ -341,7 +341,10 @@ execute_forward_test() ->
    {ok, F, State} = execute(Flow, []),
    ?assertEqual(SortedState, lists:sort(State)),
    ?assertEqual([{complete, success}, {complete, success}],
-                [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.status}
+                [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.result}
+                  || S <- F#flow.pipeline]),
+   ?assertEqual([{ready, undefined}, {ready, undefined}],
+                [{S#stage.rollback#sfunc.state, S#stage.rollback#sfunc.result}
                   || S <- F#flow.pipeline]).
 
 execute_rollback_test() ->
@@ -352,10 +355,37 @@ execute_rollback_test() ->
    {rollback, F, State} = execute(Flow, []),
    ?assertEqual([{blowup_rollback, true}], State),
    ?assertEqual([{complete, success}, {complete, failed}, {ready, undefined}],
-                [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.status}
+                [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.result}
                   || S <- F#flow.pipeline]),
    ?assertEqual([{complete, success}, {complete, success}, {ready, undefined}],
-                [{S#stage.rollback#sfunc.state, S#stage.rollback#sfunc.status}
+                [{S#stage.rollback#sfunc.state, S#stage.rollback#sfunc.result}
                   || S <- F#flow.pipeline]).
+
+long_function(State) -> timer:sleep(10000), State.
+long_function_rollback(State) -> [ {long_function_rollback, true} | State ].
+
+execute_timeout_test() ->
+   S1 = new_stage(stage1, fun stage1/1, fun stage1_rollback/1),
+   S2 = new_stage(stage2, fun stage2/1, fun stage2_rollback/1),
+   TimeoutSfunc = new_sfunc(fun long_function/1, 10), % timeout after 10 milliseconds
+   TimeoutRollback = new_sfunc(fun long_function_rollback/1),
+   TimeoutStage = new_stage( toutstage, TimeoutSfunc, TimeoutRollback ),
+   Flow = new_flow( timeout, [ S1, TimeoutStage, S2 ] ),
+   {rollback, _F, State} = execute(Flow, []),
+   ?assertEqual([{long_function_rollback, true}], State).
+
+checkpoint_function(State) ->
+   {gisla_reply, Reply} = lists:keyfind(gisla_reply, 1, State),
+   Reply ! {checkpoint, [{checkpoint_test, true}|State]},
+   error(smod_was_here).
+checkpoint_rollback(State) -> [{checkpoint_rollback, true}|State].
+
+checkpoint_test() ->
+   S1 = new_stage(stage1, fun stage1/1, fun stage1_rollback/1),
+   S2 = new_stage(stage2, fun stage2/1, fun stage2_rollback/1),
+   CheckpointStage = new_stage( chkstage, fun checkpoint_function/1, fun checkpoint_rollback/1 ),
+   Flow = new_flow( chkflow, [ S1, CheckpointStage, S2 ] ),
+   {rollback, _F, State} = execute(Flow, []),
+   ?assertEqual([{checkpoint_rollback, true}, {checkpoint_test, true}], State).
 
 -endif.
