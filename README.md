@@ -58,8 +58,8 @@ checkpoint changes - you are responsible for doing that.
 
 When the stage is finished, the function *must* return its final
 (possibly mutated) state.  This will automatically be reported back to gisla as
-the "stage-complete" state, which would then (assuming success) be passed into
-the next stage of the pipeline.
+the "stage-complete" state, which would then be passed into the next stage of
+the pipeline.
 
 An example might look something like this:
 
@@ -105,72 +105,78 @@ example_rollback(State) ->
 In this example, we don't send any checkpoints during rollback, just the
 final state update at the end of the function.
 
-### Creating stages and pipelines ###
+### Creating stage functions, stages and a flow ###
 
 Once the closures have been written, you are ready to create stages for
-your pipeline.  Use the `make_stage/3` or `make_stage/4` functions to
-build stage records. By default, stages get a 5 second timeout. You
-can adjust this timeout using `make_stage/4` - and a value of 0 means
-`infinity`
+your pipeline.
 
-Names for flows and stages may be atoms, binary strings, or strings.
+There are three abstractions in this library, from most specific to most
+general:
 
-Example:
-```erlang
-%% gets default timeout value of 5000 milliseconds
-Stage1 = gisla:make_stage(stage_1, {example_module, forward1, []},
-    {example_module, rollback1, []}),
+#### Stage functions ####
 
-%% this stage takes a long time, so make the timeout 30 seconds
-Forward = fun(State) -> forward2(State) end,
-Rollback = fun(State) -> rollback2(State) end,
-Stage2 = gisla:make_stage(stage_2, Forward, Rollback, 30*1000),
-```
+Stage functions (represented by the #sfunc record) wrap the functions which
+do work. Timeout information is also stored here - the default is 5000
+millseconds.
 
-Once we have the stages, we are ready to start adding them to a flow using
-`new_flow/2` and `add_stage/2`.
+Stage function records have the following extra fields to provide additional
+information on execution results:
 
-Example:
-```erlang
-Flow = gisla:new_flow(flow0, [ Stage1, Stage2 ]),
-```
+* state: can be either `ready` meaning ready to run, or `complete` meaning
+the function was executed.
 
-or we could do it this way:
+* result: `success` or `failed`, depending on the outcome of execution
 
-```erlang
-Empty = gisla:new_flow(),
-Flow0 = gisla:name_flow(hard_way, Empty),
-Flow1 = gisla:add_stage(Stage1, Flow0),
-Flow2 = gisla:add_stage(Stage2, Flow1),
-```
+* reason: Contains the exit reason from a process on success or on an error.
 
-You can remove a stage by its name using `delete_stage/2`.
+They are created using the `new_sfunc/0,1,2` functions. There is
+also an `update_sfunc_timeout/2` function by which you may adjust a timeout
+value.
 
-```erlang
-UpdatedFlow = gisla:delete_stage(stage3, OldFlow)
-```
+#### Stages ####
 
-And you can get a brief look at a flow by using `describe_flow/1`
+Stages are containers that have a name (which may be an atom, a binary string
+or a string), a forward stage function, and a rollback stage function.
 
-```erlang
-io:format("~p", gisla:describe_flow(Flow))
-```
+They are created using `new_stage/0` or `new_stage/3` functions. As a bit of
+syntactic sugar, you may call `new_stage/3` with either #sfunc records or
+with naked functions or MFA tuples.
+
+#### Flow ####
+
+A flow is a container for a name (which again may be an atom, a binary
+string or a string), and a pipeline, which is an ordered list of stages
+which will be executed left to right.
+
+Flows can be made using the `new_flow/0` along with `add_stage/2` and
+`delete_stage/2` or `new_flow/2`.  There is also a `describe_flow/1`
+function which outputs a simple list of flow name plus all stage names
+in order of execution.
 
 ### Executing a flow ###
 
 Once a flow is constructed and the stages are organized into a pipeline, you
 are ready to execute it.
 
-You can do that using `execute/2`
+You can do that using `execute/2`. The State parameter should be in the form
+of a proplist.
+
+When a flow has been executed, it returns a tuple of
+`{'ok'|'rollback', FinalFlow, FinalState}` where FinalFlow is the input flow
+with updated execution information in the stage function records and
+FinalState is the accumulated state mutations across all stages.
 
 ```erlang
 State = [{foo, 1}, {bar, 2}, {baz, 3}],
 Flow = gisla:new_flow(<<"example">>, [ Stage1, Stage2 ],
-{Direction, FinalState} = gisla:execute(Flow, State),
+{Outcome, FinalFlow, FinalState} = gisla:execute(Flow, State),
 
-case Direction of
-  forward -> ok;
-  rollback -> error(flow_rolled_back)
+case Outcome of
+  ok -> ok;
+  rollback -> 
+      io:format("Flow failed. Execution details: ~p, Final state: ~p~n", 
+        [FinalFlow, FinalState]),
+      error(flow_rolled_back)
 end.
 ```
 
@@ -178,10 +184,13 @@ end.
 
 If a crash or timeout occurs during rollback, gisla will itself crash.
 
-
 Build
 -----
-
+gisla is built using [rebar3][rebar3-web]. It has a dependency on the
+[hut][hut-lib] logging abstraction library in hopes that this would make using
+it in both Erlang and Elixir easier. By default hut uses the built in
+Erlang error_logger facility to log messages. Hut also supports a number
+of other logging options including Elixir's built in logging library and lager.
 
 #### About the name ####
 
@@ -190,3 +199,5 @@ It was inspired by the Icelandic saga [Gisla][gisla-saga].
 
 [saga-paper]: http://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf
 [gisla-saga]: https://en.wikipedia.org/wiki/G%C3%ADsla_saga
+[hut-lib]: https://github.com/tolbrino/hut
+[rebar3-web]: http://www.rebar3.org
