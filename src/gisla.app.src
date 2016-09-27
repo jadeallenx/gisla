@@ -1,6 +1,6 @@
 {application, gisla,
  [{description, "Sagas for Erlang"},
-  {vsn, "0.1"},
+  {vsn, "1.0.0"},
   {registered, []},
   {applications, [kernel, stdlib, hut ]},
   {env,[]},
