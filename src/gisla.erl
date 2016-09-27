@@ -28,32 +28,49 @@
 
 %% Flows
 
+%% @doc Creates a new empty `#flow{}' record.
+-spec new_flow() -> #flow{}.
 new_flow() ->
     #flow{}.
 
-new_flow(Name, Flow) when is_list(Flow)
+%% @doc Given a valid name (atom, binary string or string), and a
+%% ordered list of `#stage{}' records, return a new `#flow{}'.
+-spec new_flow( Name :: gisla_name(), Pipeline :: [ #stage{} ] ) -> #flow{}.
+new_flow(Name, Pipeline) when is_list(Pipeline)
                           andalso ( is_atom(Name)
                           orelse is_binary(Name)
                           orelse is_list(Name) ) ->
     true = is_valid_name(Name),
-    true = validate_pipeline(Flow),
+    true = validate_pipeline(Pipeline),
     #flow{
        name = Name,
-       pipeline = Flow
+       pipeline = Pipeline
     }.
 
+%% @doc Rename a `#flow{}' record to the given name.
+-spec name_flow ( Name :: gisla_name(), Flow :: #flow{} ) -> #flow{}.
 name_flow(Name, Flow = #flow{}) ->
     true = is_valid_name(Name),
     Flow#flow{ name = Name }.
 
+%% @doc Given a `#flow{}' record, output its name and the name of
+%% each stage in execution order.
+-spec describe_flow( Flow :: #flow{} ) -> { gisla_name(), [ gisla_name() ] }.
 describe_flow(#flow{ name = N, pipeline = P }) ->
     {N, [ S#stage.name || S <- P ]}.
 
 %% Stages
 
+%% @doc Return an empty `#stage{}' record.
+-spec new_stage() -> #stage{}.
 new_stage() ->
     #stage{}.
 
+%% @doc Given a valid name, and either two stage functions (`#sfunc{}') or
+%% functions or MFA tuples, return a populated `#stage{}' record.
+-spec new_stage(     Name :: gisla_name(),
+                  Forward :: stage_func() | #sfunc{},
+                 Rollback :: stage_func() | #sfunc{} ) -> #stage{}.
 new_stage(Name, F = #sfunc{}, R = #sfunc{}) ->
     true = is_valid_name(Name),
     true = validate_stage_func(F),
@@ -62,10 +79,14 @@ new_stage(Name, F = #sfunc{}, R = #sfunc{}) ->
 new_stage(Name, F, R) ->
     new_stage(Name, new_sfunc(F), new_sfunc(R)).
 
+%% @doc Add the given stage to a flow's pipeline.
+-spec add_stage( Stage :: #stage{}, Flow :: #flow{} ) -> #flow{}.
 add_stage(E = #stage{}, Flow = #flow{ pipeline = P }) ->
     true = validate_stage(E),
     Flow#flow{ pipeline = P ++ [E] }.
 
+%% @doc Remove the stage having the given name from a flow's pipeline.
+-spec delete_stage( Name :: gisla_name() | #stage{}, Flow :: #flow{} ) -> #flow{}.
 delete_stage(#stage{name = N}, F = #flow{}) ->
    delete_stage(N, F);
 delete_stage(Name, Flow = #flow{ pipeline = P }) ->
@@ -75,29 +96,45 @@ delete_stage(Name, Flow = #flow{ pipeline = P }) ->
 
 %% sfunc
 
+%% @doc Return a new empty `#sfunc{}' record.
+-spec new_sfunc() -> #sfunc{}.
 new_sfunc() ->
     #sfunc{}.
 
+%% @doc Wrap the given function in a `#sfunc{}' record. It will
+%% get the default timeout of 5000 milliseconds.
+-spec new_sfunc( Function :: stage_func() ) -> #sfunc{}.
 new_sfunc(F) ->
    new_sfunc(F, 5000).
 
-new_sfunc(F, Timeout) ->
+%% @doc Wrap the given function and use the given timeout value
+%% instead of the default value. The timeout value must be
+%% greater than zero (0).
+-spec new_sfunc( Function :: stage_func(), Timeout :: pos_integer() ) -> #sfunc{}.
+new_sfunc(F, Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
    true = validate_function(F),
    #sfunc{ f = F, timeout = Timeout }.
 
+%% @doc Replace the timeout value in the `#sfunc{}' record with the given
+%% value.
+-spec update_sfunc_timeout( Timeout :: pos_integer(), StageFunction :: #sfunc{} ) -> #sfunc{}.
 update_sfunc_timeout(T, S = #sfunc{}) when is_integer(T) 
-                                           andalso T >= 0 ->
+                                           andalso T > 0 ->
    S#sfunc{ timeout = T }.
 
 %% execute
 
+%% @doc Execute the stages in the given flow in order, passing the state
+%% between stages as an accumulator using the rollback functions if a forward
+%% stage fails or times out.
+-spec execute( Flow :: #flow{}, State :: term() ) -> {'ok'|'rollback', FinalFlow :: #flow{}, FinalState :: term()}.
 execute(F = #flow{ name = N, pipeline = P }, State) ->
     ?log(info, "Starting flow ~p", [N]),
     do_pipeline(P, F, State).
 
 %% Private functions
+%% @private
 
-%% XXX need to mark stage state - defined, running, complete, rollback, failed
 do_pipeline([], F = #flow{ direction = forward }, State) -> 
     {ok, F, purge_meta_keys(State)};
 do_pipeline([], F = #flow{ direction = rollback }, State) -> 
