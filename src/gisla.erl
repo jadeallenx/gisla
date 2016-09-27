@@ -102,17 +102,17 @@ do_pipeline([], F = #flow{ direction = forward }, State) ->
     {ok, F, purge_meta_keys(State)};
 do_pipeline([], F = #flow{ direction = rollback }, State) -> 
     {rollback, F, purge_meta_keys(State)};
-do_pipeline([H|T], F = #flow{ pipeline = P, direction = D }, State) ->
+do_pipeline([H|T], F = #flow{ direction = D }, State) ->
     {Tail, NewFlow, NewState} = case execute_stage_function(H, State, D) of
     {ok, NewStage0, State0} ->
         {T, update_flow(F, NewStage0), State0};
     {failed, NewStage1, State1} ->
         case D of
         forward ->
+            UpdatedFlow = update_flow(F#flow{ direction = rollback}, NewStage1),
+            ReversePipeline = lists:reverse(UpdatedFlow#flow.pipeline),
             Name = H#stage.name,
-            ReversePipeline = lists:reverse(P),
             NewTail = lists:dropwhile( fun(E) -> E#stage.name /= Name end, ReversePipeline ),
-	    UpdatedFlow = update_flow(F#flow{ direction = rollback}, NewStage1),
             {NewTail, UpdatedFlow, State1};
         rollback ->
             ?log(error, "Error during rollback. Giving up."),
@@ -324,8 +324,6 @@ store_purge_meta_keys_test() ->
 
    ?assertEqual([], purge_meta_keys(State)).
 
-
-
 stage1(State) -> [ {stage1, true} | State ].
 stage1_rollback(State) -> lists:keydelete(stage1, 1, State).
 
@@ -342,10 +340,22 @@ execute_forward_test() ->
    SortedState = lists:sort([{stage1, true}, {stage2, true}]),
    {ok, F, State} = execute(Flow, []),
    ?assertEqual(SortedState, lists:sort(State)),
-   ?assertEqual([{complete, success}, {complete, success}], 
-		   [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.status} 
-		    || S <- F#flow.pipeline]).
+   ?assertEqual([{complete, success}, {complete, success}],
+                [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.status}
+                  || S <- F#flow.pipeline]).
 
-
+execute_rollback_test() ->
+   S1 = new_stage(stage1, fun stage1/1, fun stage1_rollback/1),
+   S2 = new_stage(stage2, fun stage2/1, fun stage2_rollback/1),
+   RollbackStage = new_stage(rollstage, fun blowup/1, fun blowup_rollback/1),
+   Flow = new_flow(rolltest, [ S1, RollbackStage, S2 ]),
+   {rollback, F, State} = execute(Flow, []),
+   ?assertEqual([{blowup_rollback, true}], State),
+   ?assertEqual([{complete, success}, {complete, failed}, {ready, undefined}],
+                [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.status}
+                  || S <- F#flow.pipeline]),
+   ?assertEqual([{complete, success}, {complete, success}, {ready, undefined}],
+                [{S#stage.rollback#sfunc.state, S#stage.rollback#sfunc.status}
+                  || S <- F#flow.pipeline]).
 
 -endif.
