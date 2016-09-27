@@ -2,12 +2,12 @@
 
 -type stage_func() :: mfa() | function().
 -type func_state() :: 'ready' | 'complete'.
--type execution_status() :: 'success' | 'failed'.
+-type execution_result() :: 'success' | 'failed'.
 
 -record(sfunc, {
               f           :: stage_func(),
           state = 'ready' :: func_state(),
-         status           :: execution_status(),
+         result           :: execution_result(),
         timeout = 5000    :: non_neg_integer(),
          reason           :: term()
 }).
