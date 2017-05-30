@@ -1,12 +1,12 @@
 % gisla.hrl
 
--type stage_func() :: mfa() | function().
--type func_state() :: 'ready' | 'complete'.
+-type operation_fun() :: mfa() | {function(), list()}.
+-type operation_state() :: 'ready' | 'complete'.
 -type execution_result() :: 'success' | 'failed'.
 
--record(sfunc, {
-              f           :: stage_func(),
-          state = 'ready' :: func_state(),
+-record(operation, {
+              f           :: operation_fun(),
+          state = 'ready' :: operation_state(),
          result           :: execution_result(),
         timeout = 5000    :: non_neg_integer(),
          reason           :: term()
@@ -14,18 +14,18 @@
 
 -type gisla_name() :: atom() | binary() | string().
 
--record(stage, {
+-record(step, {
                name :: gisla_name(),
-            forward :: #sfunc{},
-           rollback :: #sfunc{}
+            forward :: #operation{},
+           rollback :: #operation{}
 }).
 
--type pipeline() :: [ #stage{} ].
--type flow_direction() :: 'forward' | 'rollback'.
+-type steps() :: [ #step{} ].
+-type transaction_direction() :: 'forward' | 'rollback'.
 
--record(flow, {
-          name          :: gisla_name(),
-     pipeline = []      :: pipeline(),
-    direction = forward :: flow_direction()
+-record(transaction, {
+         name           :: gisla_name(),
+        steps = []      :: steps(),
+    direction = forward :: transaction_direction()
 }).
 

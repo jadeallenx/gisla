@@ -1,6 +1,6 @@
 %% gisla
 %%
-%% Copyright (C) 2016 by Mark Allen.
+%% Copyright (C) 2016-2017 by Mark Allen.
 %%
 %% You may only use this software in accordance with the terms of the MIT
 %% license in the LICENSE file.
@@ -11,177 +11,201 @@
 -include_lib("hut/include/hut.hrl").
 
 -export([
-     new_flow/0,
-     new_flow/2,
-     name_flow/2,
-     describe_flow/1,
-     new_stage/0,
-     new_stage/3,
-     delete_stage/2,
-     add_stage/2,
-     new_sfunc/0,
-     new_sfunc/1,
-     new_sfunc/2,
-     update_sfunc_timeout/2,
+     new_transaction/0,
+     new_transaction/2,
+     name_transaction/2,
+     describe_transaction/1,
+     new_step/0,
+     new_step/3,
+     delete_step/2,
+     add_step/2,
+     new_operation/0,
+     new_operation/1,
+     new_operation/2,
+     update_operation_timeout/2,
+     update_function/2,
+     checkpoint/1,
      execute/2
 ]).
 
-%% Flows
+%% transactions
 
-%% @doc Creates a new empty `#flow{}' record.
--spec new_flow() -> #flow{}.
-new_flow() ->
-    #flow{}.
+%% @doc Creates a new empty `#transaction{}' record.
+-spec new_transaction() -> #transaction{}.
+new_transaction() ->
+    #transaction{}.
 
 %% @doc Given a valid name (atom, binary string or string), and a
-%% ordered list of `#stage{}' records, return a new `#flow{}'.
--spec new_flow( Name :: gisla_name(), Pipeline :: [ #stage{} ] ) -> #flow{}.
-new_flow(Name, Pipeline) when is_list(Pipeline)
+%% ordered list of `#step{}' records, return a new `#transaction{}'.
+-spec new_transaction( Name :: gisla_name(), Steps :: steps() ) -> #transaction{}.
+new_transaction(Name, Steps) when is_list(Steps)
                           andalso ( is_atom(Name)
                           orelse is_binary(Name)
                           orelse is_list(Name) ) ->
     true = is_valid_name(Name),
-    true = validate_pipeline(Pipeline),
-    #flow{
+    true = validate_steps(Steps),
+    #transaction{
        name = Name,
-       pipeline = Pipeline
+       steps = Steps
     }.
 
-%% @doc Rename a `#flow{}' record to the given name.
--spec name_flow ( Name :: gisla_name(), Flow :: #flow{} ) -> #flow{}.
-name_flow(Name, Flow = #flow{}) ->
+%% @doc Rename a `#transaction{}' record to the given name.
+-spec name_transaction ( Name :: gisla_name(), T :: #transaction{} ) -> #transaction{}.
+name_transaction(Name, T = #transaction{}) ->
     true = is_valid_name(Name),
-    Flow#flow{ name = Name }.
+    T#transaction{ name = Name }.
 
-%% @doc Given a `#flow{}' record, output its name and the name of
-%% each stage in execution order.
--spec describe_flow( Flow :: #flow{} ) -> { gisla_name(), [ gisla_name() ] }.
-describe_flow(#flow{ name = N, pipeline = P }) ->
-    {N, [ S#stage.name || S <- P ]}.
+%% @doc Given a `#transaction{}' record, output its name and the name of
+%% each step in execution order.
+-spec describe_transaction( T :: #transaction{} ) -> { gisla_name(), [ gisla_name() ] }.
+describe_transaction(#transaction{ name = N, steps = S }) ->
+    {N, [ Step#step.name || Step <- S ]}.
 
-%% Stages
+%% steps
 
-%% @doc Return an empty `#stage{}' record.
--spec new_stage() -> #stage{}.
-new_stage() ->
-    #stage{}.
+%% @doc Return an empty `#step{}' record.
+-spec new_step() -> #step{}.
+new_step() ->
+    #step{}.
 
-%% @doc Given a valid name, and either two stage functions (`#sfunc{}') or
-%% functions or MFA tuples, return a populated `#stage{}' record.
--spec new_stage(     Name :: gisla_name(),
-                  Forward :: stage_func() | #sfunc{},
-                 Rollback :: stage_func() | #sfunc{} ) -> #stage{}.
-new_stage(Name, F = #sfunc{}, R = #sfunc{}) ->
+%% @doc Given a valid name, and either two step functions (`#operation{}') or
+%% functions or MFA tuples, return a populated `#step{}' record.
+-spec new_step(      Name :: gisla_name(),
+                  Forward :: operation_fun() | #operation{},
+                 Rollback :: operation_fun() | #operation{} ) -> #step{}.
+new_step(Name, F = #operation{}, R = #operation{}) ->
     true = is_valid_name(Name),
-    true = validate_stage_func(F),
-    true = validate_stage_func(R),
-    #stage{ name = Name, forward = F, rollback = R };
-new_stage(Name, F, R) ->
-    new_stage(Name, new_sfunc(F), new_sfunc(R)).
+    true = validate_operation_fun(F),
+    true = validate_operation_fun(R),
+    #step{ name = Name, forward = F, rollback = R };
+new_step(Name, F, R) ->
+    new_step(Name, new_operation(F), new_operation(R)).
 
-%% @doc Add the given stage to a flow's pipeline.
--spec add_stage( Stage :: #stage{}, Flow :: #flow{} ) -> #flow{}.
-add_stage(E = #stage{}, Flow = #flow{ pipeline = P }) ->
-    true = validate_stage(E),
-    Flow#flow{ pipeline = P ++ [E] }.
+%% @doc Add the given step to a transaction's steps.
+-spec add_step( Step :: #step{}, T :: #transaction{} ) -> #transaction{}.
+add_step(E = #step{}, T = #transaction{ steps = P }) ->
+    true = validate_step(E),
+    T#transaction{ steps = P ++ [E] }.
 
-%% @doc Remove the stage having the given name from a flow's pipeline.
--spec delete_stage( Name :: gisla_name() | #stage{}, Flow :: #flow{} ) -> #flow{}.
-delete_stage(#stage{name = N}, F = #flow{}) ->
-   delete_stage(N, F);
-delete_stage(Name, Flow = #flow{ pipeline = P }) ->
+%% @doc Remove the step having the given name from a transaction's steps.
+-spec delete_step( Name :: gisla_name() | #step{}, T :: #transaction{} ) -> #transaction{}.
+delete_step(#step{name = N}, F = #transaction{}) ->
+   delete_step(N, F);
+delete_step(Name, T = #transaction{ steps = P }) ->
     true = is_valid_name(Name),
-    NewPipeline = lists:keydelete(Name, #stage.name, P),
-    Flow#flow{ pipeline = NewPipeline }.
+    NewSteps = lists:keydelete(Name, #step.name, P),
+    T#transaction{ steps = NewSteps }.
 
-%% sfunc
+%% operation
 
-%% @doc Return a new empty `#sfunc{}' record.
--spec new_sfunc() -> #sfunc{}.
-new_sfunc() ->
-    #sfunc{}.
+%% @doc Return a new empty `#operation{}' record.
+-spec new_operation() -> #operation{}.
+new_operation() ->
+    #operation{}.
 
-%% @doc Wrap the given function in a `#sfunc{}' record. It will
+%% @doc Wrap the given function in a `#operation{}' record. It will
 %% get the default timeout of 5000 milliseconds.
--spec new_sfunc( Function :: stage_func() ) -> #sfunc{}.
-new_sfunc(F) ->
-   new_sfunc(F, 5000).
+-spec new_operation( Function :: function() | operation_fun() ) -> #operation{}.
+new_operation(F) when is_function(F) ->
+   new_operation({F, []});
+new_operation(Fun = {_M, _F, _A}) ->
+   new_operation(Fun, 5000);
+new_operation(Fun = {_F, _A}) ->
+   new_operation(Fun, 5000).
 
 %% @doc Wrap the given function and use the given timeout value
 %% instead of the default value. The timeout value must be
 %% greater than zero (0).
--spec new_sfunc( Function :: stage_func(), Timeout :: pos_integer() ) -> #sfunc{}.
-new_sfunc(F, Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
+-spec new_operation( Function :: operation_fun(), Timeout :: pos_integer() ) -> #operation{}.
+new_operation(F, Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
    true = validate_function(F),
-   #sfunc{ f = F, timeout = Timeout }.
+   #operation{ f = F, timeout = Timeout }.
 
-%% @doc Replace the timeout value in the `#sfunc{}' record with the given
+%% @doc Replace the timeout value in the `#operation{}' record with the given
 %% value.
--spec update_sfunc_timeout( Timeout :: pos_integer(), StageFunction :: #sfunc{} ) -> #sfunc{}.
-update_sfunc_timeout(T, S = #sfunc{}) when is_integer(T) 
-                                           andalso T > 0 ->
-   S#sfunc{ timeout = T }.
+-spec update_operation_timeout( Timeout :: pos_integer(), StepFunction :: #operation{} ) -> #operation{}.
+update_operation_timeout(T, S = #operation{}) when is_integer(T) andalso T > 0 ->
+   S#operation{ timeout = T }.
+
+%% @doc Replace a function in an `#operation{}' record with the given
+%% function.
+update_function(F, S = #operation{}) when is_function(F) ->
+   update_function({F, []}, S);
+update_function(Fun = {_M,_F,_A}, S = #operation{}) ->
+   true = validate_function(Fun),
+   S#operation{ f = Fun };
+update_function(Fun = {_F, _A}, S = #operation{}) ->
+   true = validate_function(Fun),
+   S#operation{ f = Fun }.
 
 %% execute
 
-%% @doc Execute the stages in the given flow in order, passing the state
-%% between stages as an accumulator using the rollback functions if a forward
-%% stage fails or times out.
--spec execute( Flow :: #flow{}, State :: term() ) -> {'ok'|'rollback', FinalFlow :: #flow{}, FinalState :: term()}.
-execute(F = #flow{ name = N, pipeline = P }, State) ->
-    ?log(info, "Starting flow ~p", [N]),
-    do_pipeline(P, F, State).
+%% @doc Execute the steps in the given transaction in order, passing the state
+%% between steps as an accumulator using the rollback functions if a forward
+%% operation fails or times out.
+-spec execute( T :: #transaction{}, State :: term() ) -> {'ok'|'rollback', FinalT :: #transaction{}, FinalState :: term()}.
+execute(F = #transaction{ name = N, steps = P }, State) ->
+    ?log(info, "Starting transaction ~p", [N]),
+    do_steps(P, F, State).
+
+-spec checkpoint( State :: [ term() ] ) -> ok.
+%% @doc Return an intermediate state during an operation. Automatically
+%% removes gisla injected metadata before it sends the data.
+checkpoint(State) ->
+    ReplyPid = get_reply_pid(State),
+    ReplyPid ! {checkpoint, purge_meta_keys(State)},
+    ok.
 
 %% Private functions
 %% @private
 
-do_pipeline([], F = #flow{ direction = forward }, State) -> 
-    {ok, F, purge_meta_keys(State)};
-do_pipeline([], F = #flow{ direction = rollback }, State) -> 
-    {rollback, F, purge_meta_keys(State)};
-do_pipeline([H|T], F = #flow{ direction = D }, State) ->
-    {Tail, NewFlow, NewState} = case execute_stage_function(H, State, D) of
-    {ok, NewStage0, State0} ->
-        {T, update_flow(F, NewStage0), State0};
-    {failed, NewStage1, State1} ->
+do_steps([], T = #transaction{ direction = forward }, State) ->
+    {ok, T, purge_meta_keys(State)};
+do_steps([], T = #transaction{ direction = rollback }, State) ->
+    {rollback, T, purge_meta_keys(State)};
+do_steps([H|T], Txn = #transaction{ direction = D }, State) ->
+    {Tail, NewT, NewState} = case execute_operation(H, State, D) of
+    {ok, NewStep0, State0} ->
+        {T, update_transaction(Txn, NewStep0), State0};
+    {failed, NewStep1, State1} ->
         case D of
         forward ->
-            UpdatedFlow = update_flow(F#flow{ direction = rollback}, NewStage1),
-            ReversePipeline = lists:reverse(UpdatedFlow#flow.pipeline),
-            Name = H#stage.name,
-            NewTail = lists:dropwhile( fun(E) -> E#stage.name /= Name end, ReversePipeline ),
-            {NewTail, UpdatedFlow, State1};
+            UpdatedTxn = update_transaction(Txn#transaction{ direction = rollback}, NewStep1),
+            ReverseSteps = lists:reverse(UpdatedTxn#transaction.steps),
+            Name = H#step.name,
+            NewTail = lists:dropwhile( fun(E) -> E#step.name /= Name end, ReverseSteps ),
+            {NewTail, UpdatedTxn, State1};
         rollback ->
             ?log(error, "Error during rollback. Giving up."),
             error(failed_rollback)
         end
     end,
-    do_pipeline(Tail, NewFlow, NewState).
+    do_steps(Tail, NewT, NewState).
 
-update_flow(F = #flow{ pipeline = P }, Stage = #stage{ name = N }) ->
-    NewPipeline = lists:keyreplace(N, #stage.name, P, Stage),
-    F#flow{ pipeline = NewPipeline }.
+update_transaction(T = #transaction{ steps = S }, Step = #step{ name = N }) ->
+    NewSteps = lists:keyreplace(N, #step.name, S, Step),
+    T#transaction{ steps = NewSteps }.
 
-execute_stage_function(S = #stage{ name = N, rollback = R }, State, rollback) ->
-    update_stage(S, rollback, do_stage(N, R, State));
-execute_stage_function(S = #stage{ name = N, forward = F }, State, forward) ->
-    update_stage(S, forward, do_stage(N, F, State)).
+execute_operation(S = #step{ name = N, rollback = R }, State, rollback) ->
+    update_step(S, rollback, do_step(N, R, State));
+execute_operation(S = #step{ name = N, forward = F }, State, forward) ->
+    update_step(S, forward, do_step(N, F, State)).
 
-update_stage(Stage, rollback, {Reply, Func, State}) ->
-    {Reply, Stage#stage{ rollback = Func }, State};
-update_stage(Stage, forward, {Reply, Func, State}) ->
-    {Reply, Stage#stage{ forward = Func }, State}.
+update_step(Step, rollback, {Reply, Func, State}) ->
+    {Reply, Step#step{ rollback = Func }, State};
+update_step(Step, forward, {Reply, Func, State}) ->
+    {Reply, Step#step{ forward = Func }, State}.
 
-do_stage(Name, Func, State) ->
+do_step(Name, Func, State) ->
     {F, Timeout} = make_closure(Func, self(), State),
     {Pid, Mref} = spawn_monitor(fun() -> F() end),
-    ?log(info, "Started pid ~p to execute stage ~p", [Pid, Name]),
+    ?log(info, "Started pid ~p to execute step ~p", [Pid, Name]),
     handle_loop_return(loop(Mref, Pid, Timeout, State, false), Func).
 
 handle_loop_return({ok, Reason, State}, Func) ->
-    {ok, Func#sfunc{ state = complete, result = success, reason = Reason }, State};
+    {ok, Func#operation{ state = complete, result = success, reason = Reason }, State};
 handle_loop_return({failed, Reason, State}, Func) ->
-    {failed, Func#sfunc{ state = complete, result = failed, reason = Reason }, State}.
+    {failed, Func#operation{ state = complete, result = failed, reason = Reason }, State}.
 
 loop(Mref, Pid, Timeout, State, NormalExitRcvd) ->
     receive
@@ -189,7 +213,7 @@ loop(Mref, Pid, Timeout, State, NormalExitRcvd) ->
             ?log(debug, "Normal exit received, with no failure messages out of order."),
             {ok, normal, State};
         {complete, NewState} ->
-            ?log(info, "Stage sent complete..."),
+            ?log(info, "Step sent complete..."),
             demonitor(Mref, [flush]), %% prevent us from getting any spurious failures and clean out our mailbox
             self() ! race_conditions_are_bad_mmmkay,
             loop(Mref, Pid, Timeout, NewState, true);
@@ -218,18 +242,26 @@ loop(Mref, Pid, Timeout, State, NormalExitRcvd) ->
         end
    end.
 
-make_closure(#sfunc{ f = {M, F, A}, timeout = T }, ReplyPid, State) ->
-   {fun() -> ReplyPid ! {complete, M:F(A ++ inject_meta_state({gisla_reply, ReplyPid}, State))} end, T};
+make_closure(#operation{ f = {M, F, A}, timeout = T }, ReplyPid, State) ->
+   {fun() -> ReplyPid ! {complete, apply(M, F, A
+                          ++ [maybe_inject_meta({gisla_reply, ReplyPid}, State)])}
+    end, T};
 
-make_closure(#sfunc{ f = F, timeout = T }, ReplyPid, State) when is_function(F) ->
-   {fun() -> ReplyPid ! {complete, F(inject_meta_state({gisla_reply, ReplyPid}, State))} end, T}.
+make_closure(#operation{ f = {F, A}, timeout = T }, ReplyPid, State) ->
+   {fun() -> ReplyPid ! {complete, apply(F, A
+                          ++ [maybe_inject_meta({gisla_reply, ReplyPid}, State)])}
+    end, T}.
 
-inject_meta_state(Meta = {K, _V}, State) ->
+maybe_inject_meta(Meta = {K, _V}, State) ->
     case lists:keyfind(K, 1, State) of
        false ->
             [ Meta | State ];
        _ -> State
     end.
+
+get_reply_pid(State) ->
+    {gisla_reply, Pid} = lists:keyfind(gisla_reply, 1, State),
+    Pid.
 
 purge_meta_keys(State) ->
     lists:foldl(fun remove_meta/2, State, [gisla_reply]).
@@ -237,21 +269,21 @@ purge_meta_keys(State) ->
 remove_meta(K, State) ->
     lists:keydelete(K, 1, State).
 
-validate_pipeline(Pipeline) when is_list(Pipeline) ->
-    lists:all(fun validate_stage/1, Pipeline);
-validate_pipeline(_) -> false.
+validate_steps(Steps) when is_list(Steps) ->
+    lists:all(fun validate_step/1, Steps);
+validate_steps(_) -> false.
 
-validate_stage(#stage{ name = N, forward = F, rollback = R }) ->
+validate_step(#step{ name = N, forward = F, rollback = R }) ->
     is_valid_name(N)
-    andalso validate_stage_func(F)
-    andalso validate_stage_func(R);
-validate_stage(_) -> false.
+    andalso validate_operation_fun(F)
+    andalso validate_operation_fun(R);
+validate_step(_) -> false.
 
-validate_stage_func( #sfunc{ f = F, timeout = T } ) ->
+validate_operation_fun( #operation{ f = F, timeout = T } ) ->
     validate_function(F) andalso is_integer(T) andalso T >= 0;
-validate_stage_func(_) -> false.
+validate_operation_fun(_) -> false.
 
-validate_function(E) when is_function(E) -> true;
+validate_function({F, A}) when is_function(F) andalso is_list(A) -> true;
 validate_function({M, F, A}) when is_atom(M)
                                   andalso is_atom(F)
                                   andalso is_list(A) -> true;
@@ -280,79 +312,80 @@ valid_name_test_() ->
 validate_function_test_() ->
     F = fun(E) -> E, ok end,
     [
-      ?_assert(validate_function(fun() -> ok end)),
+      ?_assert(validate_function({fun() -> ok end, []})),
       ?_assert(validate_function({?MODULE, test_function, [test]})),
-      ?_assert(validate_function(F)),
+      ?_assert(validate_function({F, []})),
+      ?_assert(validate_function({F, [foo]})),
       ?_assertEqual(false, validate_function(<<"function">>)),
       ?_assertEqual(false, validate_function(decepticons)),
       ?_assertEqual(false, validate_function("function")),
       ?_assertEqual(false, validate_function(42))
     ].
 
-new_sfunc_test_() ->
+new_operation_test_() ->
    F = fun(E) -> E end,
-   S = #sfunc{},
-   S1 = S#sfunc{ f = F },
-   S2 = S#sfunc{ f = F, timeout = 100 },
+   S = #operation{},
+   S1 = S#operation{ f = {F, []} },
+   S2 = S#operation{ f = {F, []}, timeout = 100 },
    [
-     ?_assertEqual(S1, new_sfunc(F)),
-     ?_assertEqual(S2, update_sfunc_timeout(100, new_sfunc(F)))
+     ?_assertEqual(S1, new_operation(F)),
+     ?_assertEqual(S2, update_operation_timeout(100, new_operation(F)))
    ].
 
-new_stage_test_() ->
+new_step_test_() ->
    F = fun(E) -> E end,
    MFA = {?MODULE, test_function, []},
-   SF = new_sfunc(F),
-   SMFA = new_sfunc(MFA),
+   SF = new_operation(F),
+   SMFA = new_operation(MFA),
    [
-      ?_assertEqual(#stage{ name = test, forward = SF, rollback = SMFA }, new_stage(test, F, MFA)),
-      ?_assertEqual(#stage{ name = test, forward = SMFA,  rollback = SF }, new_stage(test, MFA, F))
+      ?_assertEqual(#step{ name = test, forward = SF, rollback = SMFA }, new_step(test, F, MFA)),
+      ?_assertEqual(#step{ name = test, forward = SMFA,  rollback = SF }, new_step(test, MFA, F))
    ].
 
-validate_pipeline_test_() ->
-    F = new_sfunc(fun(E) -> E, ok end),
-    G = new_sfunc({?MODULE, test_function, [test]}),
-    TestStage1 = #stage{ name = test1, forward = F, rollback = G },
-    TestStage2 = #stage{ name = test2, forward = G, rollback = F },
-    TestPipeline = [ TestStage1, TestStage2 ],
-    BadPipeline = #flow{ name = foo, pipeline = kevin },
+validate_steps_test_() ->
+    F = new_operation(fun(E) -> E, ok end),
+    G = new_operation({?MODULE, test_function, [test]}),
+    TestStep1 = #step{ name = test1, forward = F, rollback = G },
+    TestStep2 = #step{ name = test2, forward = G, rollback = F },
+    TestSteps = [ TestStep1, TestStep2 ],
+    BadSteps = #transaction{ name = foo, steps = kevin },
     [
-      ?_assert(validate_pipeline(TestPipeline)),
-      ?_assertEqual(false, validate_pipeline(BadPipeline))
+      ?_assert(validate_steps(TestSteps)),
+      ?_assertEqual(false, validate_steps(BadSteps))
     ].
 
 new_test_() ->
    F = fun(E) -> E end,
    G = fun(X) -> X end,
-   TestStage1 = new_stage(test, F, G),
-   TestStage2 = new_stage(bar, F, G),
+   TestStep1 = new_step(test, F, G),
+   TestStep2 = new_step(bar, F, G),
    [
-      ?_assertEqual(#flow{}, new_flow()),
-      ?_assertEqual(#stage{}, new_stage()),
-      ?_assertEqual(#sfunc{}, new_sfunc()),
-      ?_assertEqual(#flow{ name = test }, name_flow(test, new_flow())),
-      ?_assertEqual(#flow{ name = baz, pipeline = [ TestStage1, TestStage2 ] }, new_flow(baz, [ TestStage1, TestStage2 ]))
+      ?_assertEqual(#transaction{}, new_transaction()),
+      ?_assertEqual(#step{}, new_step()),
+      ?_assertEqual(#operation{}, new_operation()),
+      ?_assertEqual(#transaction{ name = test }, name_transaction(test, new_transaction())),
+      ?_assertEqual(#transaction{ name = baz, steps = [ TestStep1, TestStep2 ] }, new_transaction(baz, [ TestStep1, TestStep2 ]))
    ].
 
-mod_pipeline_test_() ->
+mod_steps_test_() ->
    F = fun(E) -> E end,
    G = fun(X) -> X end,
-   TestStage1 = new_stage(test, F, G),
-   TestStage2 = new_stage(bar, F, G),
+   TestStep1 = new_step(test, F, G),
+   TestStep2 = new_step(bar, F, G),
 
    [
-      ?_assertEqual(#flow{ pipeline = [ TestStage1 ] }, add_stage(TestStage1, new_flow())),
-      ?_assertEqual(#flow{ name = foo, pipeline = [ TestStage2 ] }, delete_stage(test, new_flow(foo, [ TestStage1, TestStage2 ])))
+      ?_assertEqual(#transaction{ steps = [ TestStep1 ] }, add_step(TestStep1, new_transaction())),
+      ?_assertEqual(#transaction{ name = foo, steps = [ TestStep2 ] }, delete_step(test, new_transaction(foo, [ TestStep1, TestStep2 ])))
    ].
 
-describe_flow_test_() ->
+describe_transaction_test_() ->
    F = fun(E) -> E end,
    G = fun(X) -> X end,
-   TestStage1 = new_stage(stage1, F, G),
-   TestStage2 = new_stage(stage2, F, G),
-   TestFlow = new_flow(test, [ TestStage1, TestStage2 ]),
+   TestStep1 = new_step(step1, F, G),
+   TestStep2 = new_step(step2, F, G),
+   TestTxn = new_transaction(test, [ TestStep1, TestStep2 ]),
    [
-      ?_assertEqual({ test, [stage1, stage2] }, describe_flow(TestFlow))
+      ?_assertEqual({ test, [step1, step2] }, describe_transaction(TestTxn))
    ].
 
 store_purge_meta_keys_test() ->
@@ -361,68 +394,67 @@ store_purge_meta_keys_test() ->
 
    ?assertEqual([], purge_meta_keys(State)).
 
-stage1(State) -> [ {stage1, true} | State ].
-stage1_rollback(State) -> lists:keydelete(stage1, 1, State).
+step1(State) -> [ {step1, true} | State ].
+step1_rollback(State) -> lists:keydelete(step1, 1, State).
 
-stage2(State) -> [ {stage2, true} | State ].
-stage2_rollback(State) -> lists:keydelete(stage2, 1, State).
+step2(State) -> [ {step2, true} | State ].
+step2_rollback(State) -> lists:keydelete(step2, 1, State).
 
 blowup(_State) -> error(blowup).
 blowup_rollback(State) -> [ {blowup_rollback, true} | State ].
 
 execute_forward_test() ->
-   S1 = new_stage(stage1, fun stage1/1, fun stage1_rollback/1),
-   S2 = new_stage(stage2, fun stage2/1, fun stage2_rollback/1),
-   Flow = new_flow(test, [ S1, S2 ]),
-   SortedState = lists:sort([{stage1, true}, {stage2, true}]),
-   {ok, F, State} = execute(Flow, []),
+   S1 = new_step(step1, fun step1/1, fun step1_rollback/1),
+   S2 = new_step(step2, fun step2/1, fun step2_rollback/1),
+   T = new_transaction(test, [ S1, S2 ]),
+   SortedState = lists:sort([{step1, true}, {step2, true}]),
+   {ok, F, State} = execute(T, []),
    ?assertEqual(SortedState, lists:sort(State)),
    ?assertEqual([{complete, success}, {complete, success}],
-                [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.result}
-                  || S <- F#flow.pipeline]),
+                [{S#step.forward#operation.state, S#step.forward#operation.result}
+                  || S <- F#transaction.steps]),
    ?assertEqual([{ready, undefined}, {ready, undefined}],
-                [{S#stage.rollback#sfunc.state, S#stage.rollback#sfunc.result}
-                  || S <- F#flow.pipeline]).
+                [{S#step.rollback#operation.state, S#step.rollback#operation.result}
+                  || S <- F#transaction.steps]).
 
 execute_rollback_test() ->
-   S1 = new_stage(stage1, fun stage1/1, fun stage1_rollback/1),
-   S2 = new_stage(stage2, fun stage2/1, fun stage2_rollback/1),
-   RollbackStage = new_stage(rollstage, fun blowup/1, fun blowup_rollback/1),
-   Flow = new_flow(rolltest, [ S1, RollbackStage, S2 ]),
-   {rollback, F, State} = execute(Flow, []),
+   S1 = new_step(step1, fun step1/1, fun step1_rollback/1),
+   S2 = new_step(step2, fun step2/1, fun step2_rollback/1),
+   RollbackStep = new_step(rollstep, fun blowup/1, fun blowup_rollback/1),
+   T = new_transaction(rolltest, [ S1, RollbackStep, S2 ]),
+   {rollback, F, State} = execute(T, []),
    ?assertEqual([{blowup_rollback, true}], State),
    ?assertEqual([{complete, success}, {complete, failed}, {ready, undefined}],
-                [{S#stage.forward#sfunc.state, S#stage.forward#sfunc.result}
-                  || S <- F#flow.pipeline]),
+                [{S#step.forward#operation.state, S#step.forward#operation.result}
+                  || S <- F#transaction.steps]),
    ?assertEqual([{complete, success}, {complete, success}, {ready, undefined}],
-                [{S#stage.rollback#sfunc.state, S#stage.rollback#sfunc.result}
-                  || S <- F#flow.pipeline]).
+                [{S#step.rollback#operation.state, S#step.rollback#operation.result}
+                  || S <- F#transaction.steps]).
 
 long_function(State) -> timer:sleep(10000), State.
 long_function_rollback(State) -> [ {long_function_rollback, true} | State ].
 
 execute_timeout_test() ->
-   S1 = new_stage(stage1, fun stage1/1, fun stage1_rollback/1),
-   S2 = new_stage(stage2, fun stage2/1, fun stage2_rollback/1),
-   TimeoutSfunc = new_sfunc(fun long_function/1, 10), % timeout after 10 milliseconds
-   TimeoutRollback = new_sfunc(fun long_function_rollback/1),
-   TimeoutStage = new_stage( toutstage, TimeoutSfunc, TimeoutRollback ),
-   Flow = new_flow( timeout, [ S1, TimeoutStage, S2 ] ),
-   {rollback, _F, State} = execute(Flow, []),
+   S1 = new_step(step1, fun step1/1, fun step1_rollback/1),
+   S2 = new_step(step2, fun step2/1, fun step2_rollback/1),
+   TimeoutFwd = new_operation({fun long_function/1, []}, 10), % timeout after 10 milliseconds
+   TimeoutRollback = new_operation(fun long_function_rollback/1),
+   TimeoutStep = new_step( toutstep, TimeoutFwd, TimeoutRollback ),
+   T = new_transaction( timeout, [ S1, TimeoutStep, S2 ] ),
+   {rollback, _F, State} = execute(T, []),
    ?assertEqual([{long_function_rollback, true}], State).
 
 checkpoint_function(State) ->
-   {gisla_reply, Reply} = lists:keyfind(gisla_reply, 1, State),
-   Reply ! {checkpoint, [{checkpoint_test, true}|State]},
+   ok = gisla:checkpoint([{checkpoint_test, true}| State]),
    error(smod_was_here).
 checkpoint_rollback(State) -> [{checkpoint_rollback, true}|State].
 
 checkpoint_test() ->
-   S1 = new_stage(stage1, fun stage1/1, fun stage1_rollback/1),
-   S2 = new_stage(stage2, fun stage2/1, fun stage2_rollback/1),
-   CheckpointStage = new_stage( chkstage, fun checkpoint_function/1, fun checkpoint_rollback/1 ),
-   Flow = new_flow( chkflow, [ S1, CheckpointStage, S2 ] ),
-   {rollback, _F, State} = execute(Flow, []),
+   S1 = new_step(step1, fun step1/1, fun step1_rollback/1),
+   S2 = new_step(step2, fun step2/1, fun step2_rollback/1),
+   CheckpointStep = new_step( chkstep, fun checkpoint_function/1, fun checkpoint_rollback/1 ),
+   T = new_transaction( chktransaction, [ S1, CheckpointStep, S2 ] ),
+   {rollback, _F, State} = execute(T, []),
    ?assertEqual([{checkpoint_rollback, true}, {checkpoint_test, true}], State).
 
 -endif.
