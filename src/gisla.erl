@@ -76,7 +76,10 @@ new_step(Name, F = #operation{}, R = #operation{}) ->
     true = validate_operation_fun(R),
     #step{ name = Name, forward = F, rollback = R };
 new_step(Name, F, R) ->
-    new_step(Name, new_operation(F), new_operation(R)).
+    true = is_valid_name(Name),
+    Forward = new_operation(F),
+    Rollback = new_operation(R),
+    #step{ name = Name, forward = Forward, rollback = Rollback }.
 
 %% @doc Add the given step to a transaction's steps.
 -spec add_step( Step :: #step{}, T :: #transaction{} ) -> #transaction{}.
