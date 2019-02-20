@@ -200,14 +200,15 @@ do_step(Name, Func, State) ->
     {F, Timeout} = make_closure(Func, self(), State),
     {Pid, Mref} = spawn_monitor(fun() -> F() end),
     ?log(info, "Started pid ~p to execute step ~p", [Pid, Name]),
-    handle_loop_return(loop(Mref, Pid, Timeout, State, false), Func).
+    TRef = erlang:start_timer(Timeout, self(), timeout),
+    handle_loop_return(loop(Mref, Pid, TRef, State, false), Func).
 
 handle_loop_return({ok, Reason, State}, Func) ->
     {ok, Func#operation{ state = complete, result = success, reason = Reason }, State};
 handle_loop_return({failed, Reason, State}, Func) ->
     {failed, Func#operation{ state = complete, result = failed, reason = Reason }, State}.
 
-loop(Mref, Pid, Timeout, State, NormalExitRcvd) ->
+loop(Mref, Pid, TRef, State, NormalExitRcvd) ->
     receive
         race_conditions_are_bad_mmmkay ->
             ?log(debug, "Normal exit received, with no failure messages out of order."),
@@ -216,30 +217,32 @@ loop(Mref, Pid, Timeout, State, NormalExitRcvd) ->
             ?log(info, "Step sent complete..."),
             demonitor(Mref, [flush]), %% prevent us from getting any spurious failures and clean out our mailbox
             self() ! race_conditions_are_bad_mmmkay,
-            loop(Mref, Pid, Timeout, NewState, true);
+            erlang:cancel_timer(TRef, [{async, true}]),
+            loop(Mref, Pid, undef, NewState, true);
         {checkpoint, NewState} ->
             ?log(debug, "Got a checkpoint state"),
-            loop(Mref, Pid, Timeout, NewState, NormalExitRcvd);
+            loop(Mref, Pid, TRef, NewState, NormalExitRcvd);
         {'DOWN', Mref, process, Pid, normal} ->
             %% so we exited fine but didn't get a results reply yet... let's loop around maybe it will be
             %% the next message in our mailbox.
-            loop(Mref, Pid, Timeout, State, true);
+            loop(Mref, Pid, TRef, State, true);
         {'DOWN', Mref, process, Pid, Reason} ->
             %% We crashed for some reason
             ?log(error, "Pid ~p failed because ~p", [Pid, Reason]),
+            erlang:cancel_timer(TRef, [{async, true}]),
             {failed, Reason, State};
+        {timeout, TRef, _} ->
+            case NormalExitRcvd of
+                false ->
+                    ?log(error, "Pid ~p timed out", [Pid]),
+                    {failed, timeout, State};
+                true ->
+                    ?log(info, "We exited cleanly but timed out... *NOT* treating as a failure.", []),
+                    {ok, timeout, State}
+            end;
         Msg ->
             ?log(warning, "Some rando message just showed up! ~p Ignoring.", [Msg]),
-            loop(Mref, Pid, Timeout, State, NormalExitRcvd)
-   after Timeout ->
-        case NormalExitRcvd of
-            false ->
-                ?log(error, "Pid ~p timed out after ~p milliseconds", [Pid, Timeout]),
-                {failed, timeout, State};
-            true ->
-                ?log(info, "We exited cleanly but timed out... *NOT* treating as a failure.", []),
-                {ok, timeout, State}
-        end
+            loop(Mref, Pid, TRef, State, NormalExitRcvd)
    end.
 
 make_closure(#operation{ f = {M, F, A}, timeout = T }, ReplyPid, State) ->
