@@ -94,9 +94,8 @@ The rollback operation might be something like:
 example_rollback(State) ->
     %% gisla pid is in our state (if we want it)
     {terah_ets_tbl, TableName} = lists:keyfind(terah_ets_tbl, 1, State),
-    true = terah:remove_ets(TableName, Id),
-
     {terah_id, Id} = lists:keyfind(terah_id, 1, State),
+    true = terah:remove_ets(TableName, Id),
     true = unstable_network:deactivate_terah_id(Id),
     true = terah:make_id_failed(Id),
     [{ terah_id_rollback, Id } | State ].

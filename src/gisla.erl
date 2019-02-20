@@ -38,10 +38,7 @@ new_transaction() ->
 %% @doc Given a valid name (atom, binary string or string), and a
 %% ordered list of `#step{}' records, return a new `#transaction{}'.
 -spec new_transaction( Name :: gisla_name(), Steps :: steps() ) -> #transaction{}.
-new_transaction(Name, Steps) when is_list(Steps)
-                          andalso ( is_atom(Name)
-                          orelse is_binary(Name)
-                          orelse is_list(Name) ) ->
+new_transaction(Name, Steps) ->
     true = is_valid_name(Name),
     true = validate_steps(Steps),
     #transaction{
@@ -79,7 +76,10 @@ new_step(Name, F = #operation{}, R = #operation{}) ->
     true = validate_operation_fun(R),
     #step{ name = Name, forward = F, rollback = R };
 new_step(Name, F, R) ->
-    new_step(Name, new_operation(F), new_operation(R)).
+    true = is_valid_name(Name),
+    Forward = new_operation(F),
+    Rollback = new_operation(R),
+    #step{ name = Name, forward = Forward, rollback = Rollback }.
 
 %% @doc Add the given step to a transaction's steps.
 -spec add_step( Step :: #step{}, T :: #transaction{} ) -> #transaction{}.
@@ -116,7 +116,7 @@ new_operation(Fun = {_F, _A}) ->
 %% @doc Wrap the given function and use the given timeout value
 %% instead of the default value. The timeout value must be
 %% greater than zero (0).
--spec new_operation( Function :: operation_fun(), Timeout :: pos_integer() ) -> #operation{}.
+-spec new_operation( Function :: function() | operation_fun(), Timeout :: pos_integer() ) -> #operation{}.
 new_operation(F, Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
    true = validate_function(F),
    #operation{ f = F, timeout = Timeout }.
