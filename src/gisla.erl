@@ -113,7 +113,7 @@ new_operation(Fun = {_F, _A}) ->
 %% @doc Wrap the given function and use the given timeout value
 %% instead of the default value. The timeout value must be
 %% greater than zero (0).
--spec new_operation( Function :: operation_fun(), Timeout :: pos_integer() ) -> #operation{}.
+-spec new_operation( Function :: function() | operation_fun(), Timeout :: pos_integer() ) -> #operation{}.
 new_operation(F, Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
    true = validate_function(F),
    #operation{ f = F, timeout = Timeout }.
