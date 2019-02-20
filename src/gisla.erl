@@ -38,10 +38,7 @@ new_transaction() ->
 %% @doc Given a valid name (atom, binary string or string), and a
 %% ordered list of `#step{}' records, return a new `#transaction{}'.
 -spec new_transaction( Name :: gisla_name(), Steps :: steps() ) -> #transaction{}.
-new_transaction(Name, Steps) when is_list(Steps)
-                          andalso ( is_atom(Name)
-                          orelse is_binary(Name)
-                          orelse is_list(Name) ) ->
+new_transaction(Name, Steps) ->
     true = is_valid_name(Name),
     true = validate_steps(Steps),
     #transaction{
