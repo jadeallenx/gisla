@@ -287,10 +287,16 @@ validate_operation_fun( #operation{ f = F, timeout = T } ) ->
     validate_function(F) andalso is_integer(T) andalso T >= 0;
 validate_operation_fun(_) -> false.
 
-validate_function({F, A}) when is_function(F) andalso is_list(A) -> true;
+validate_function({F, A}) when is_list(A) -> true andalso is_function(F, length(A) + 1);
 validate_function({M, F, A}) when is_atom(M)
                                   andalso is_atom(F)
-                                  andalso is_list(A) -> true;
+                                  andalso is_list(A) ->
+    case code:ensure_loaded(M) of
+        {module, M} ->
+            erlang:function_exported(M, F, length(A) + 1);
+        _ ->
+            false
+    end;
 validate_function(_) -> false.
 
 is_valid_name(N) ->
@@ -316,14 +322,18 @@ valid_name_test_() ->
 validate_function_test_() ->
     F = fun(E) -> E, ok end,
     [
-      ?_assert(validate_function({fun() -> ok end, []})),
-      ?_assert(validate_function({?MODULE, test_function, [test]})),
+      ?_assert(validate_function({?MODULE, test_function, []})),
+      ?_assert(validate_function({fun(E) -> E end, []})),
       ?_assert(validate_function({F, []})),
-      ?_assert(validate_function({F, [foo]})),
+      ?_assertEqual(false, validate_function({?MODULE, test_function, [test]})),
+      ?_assertEqual(false, validate_function({fun() -> ok end, []})),
       ?_assertEqual(false, validate_function(<<"function">>)),
       ?_assertEqual(false, validate_function(decepticons)),
       ?_assertEqual(false, validate_function("function")),
-      ?_assertEqual(false, validate_function(42))
+      ?_assertEqual(false, validate_function(42)),
+      ?_assertEqual(false, validate_function({F, [foo, bar]})),
+      ?_assertEqual(false, validate_function({?MODULE, test_function, [test1, test2]})),
+      ?_assertEqual(false, validate_function({fake_module, test_function, [test]}))
     ].
 
 new_operation_test_() ->
@@ -348,7 +358,7 @@ new_step_test_() ->
 
 validate_steps_test_() ->
     F = new_operation(fun(E) -> E, ok end),
-    G = new_operation({?MODULE, test_function, [test]}),
+    G = new_operation({?MODULE, test_function, []}),
     TestStep1 = #step{ ref = make_ref(), name = test1, forward = F, rollback = G },
     TestStep2 = #step{ ref = make_ref(), name = test2, forward = G, rollback = F },
     TestSteps = [ TestStep1, TestStep2 ],
