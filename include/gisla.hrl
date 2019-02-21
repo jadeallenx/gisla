@@ -15,6 +15,7 @@
 -type gisla_name() :: atom() | binary() | string().
 
 -record(step, {
+                ref :: reference(),
                name :: gisla_name(),
             forward :: #operation{},
            rollback :: #operation{}

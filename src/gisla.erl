@@ -63,7 +63,7 @@ describe_transaction(#transaction{ name = N, steps = S }) ->
 %% @doc Return an empty `#step{}' record.
 -spec new_step() -> #step{}.
 new_step() ->
-    #step{}.
+    #step{ ref = make_ref() }.
 
 %% @doc Given a valid name, and either two step functions (`#operation{}') or
 %% functions or MFA tuples, return a populated `#step{}' record.
@@ -74,12 +74,12 @@ new_step(Name, F = #operation{}, R = #operation{}) ->
     true = is_valid_name(Name),
     true = validate_operation_fun(F),
     true = validate_operation_fun(R),
-    #step{ name = Name, forward = F, rollback = R };
+    #step{ ref = make_ref(), name = Name, forward = F, rollback = R };
 new_step(Name, F, R) ->
     true = is_valid_name(Name),
     Forward = new_operation(F),
     Rollback = new_operation(R),
-    #step{ name = Name, forward = Forward, rollback = Rollback }.
+    #step{ ref = make_ref(), name = Name, forward = Forward, rollback = Rollback }.
 
 %% @doc Add the given step to a transaction's steps.
 -spec add_step( Step :: #step{}, T :: #transaction{} ) -> #transaction{}.
@@ -172,8 +172,8 @@ do_steps([H|T], Txn = #transaction{ direction = D }, State) ->
         forward ->
             UpdatedTxn = update_transaction(Txn#transaction{ direction = rollback}, NewStep1),
             ReverseSteps = lists:reverse(UpdatedTxn#transaction.steps),
-            Name = H#step.name,
-            NewTail = lists:dropwhile( fun(E) -> E#step.name /= Name end, ReverseSteps ),
+            Ref = H#step.ref,
+            NewTail = lists:dropwhile( fun(E) -> E#step.ref /= Ref end, ReverseSteps ),
             {NewTail, UpdatedTxn, State1};
         rollback ->
             ?log(error, "Error during rollback. Giving up."),
@@ -182,8 +182,8 @@ do_steps([H|T], Txn = #transaction{ direction = D }, State) ->
     end,
     do_steps(Tail, NewT, NewState).
 
-update_transaction(T = #transaction{ steps = S }, Step = #step{ name = N }) ->
-    NewSteps = lists:keyreplace(N, #step.name, S, Step),
+update_transaction(T = #transaction{ steps = S }, Step = #step{ ref = Ref }) ->
+    NewSteps = lists:keyreplace(Ref, #step.ref, S, Step),
     T#transaction{ steps = NewSteps }.
 
 execute_operation(S = #step{ name = N, rollback = R }, State, rollback) ->
@@ -276,8 +276,9 @@ validate_steps(Steps) when is_list(Steps) ->
     lists:all(fun validate_step/1, Steps);
 validate_steps(_) -> false.
 
-validate_step(#step{ name = N, forward = F, rollback = R }) ->
-    is_valid_name(N)
+validate_step(#step{ ref = Ref, name = N, forward = F, rollback = R }) ->
+    is_reference(Ref)
+    andalso is_valid_name(N)
     andalso validate_operation_fun(F)
     andalso validate_operation_fun(R);
 validate_step(_) -> false.
@@ -341,15 +342,15 @@ new_step_test_() ->
    SF = new_operation(F),
    SMFA = new_operation(MFA),
    [
-      ?_assertEqual(#step{ name = test, forward = SF, rollback = SMFA }, new_step(test, F, MFA)),
-      ?_assertEqual(#step{ name = test, forward = SMFA,  rollback = SF }, new_step(test, MFA, F))
+      ?_assertMatch(#step{ ref = Ref, name = test, forward = SF, rollback = SMFA } when is_reference(Ref), new_step(test, F, MFA)),
+      ?_assertMatch(#step{ ref = Ref, name = test, forward = SMFA,  rollback = SF } when is_reference(Ref), new_step(test, MFA, F))
    ].
 
 validate_steps_test_() ->
     F = new_operation(fun(E) -> E, ok end),
     G = new_operation({?MODULE, test_function, [test]}),
-    TestStep1 = #step{ name = test1, forward = F, rollback = G },
-    TestStep2 = #step{ name = test2, forward = G, rollback = F },
+    TestStep1 = #step{ ref = make_ref(), name = test1, forward = F, rollback = G },
+    TestStep2 = #step{ ref = make_ref(), name = test2, forward = G, rollback = F },
     TestSteps = [ TestStep1, TestStep2 ],
     BadSteps = #transaction{ name = foo, steps = kevin },
     [
@@ -364,7 +365,7 @@ new_test_() ->
    TestStep2 = new_step(bar, F, G),
    [
       ?_assertEqual(#transaction{}, new_transaction()),
-      ?_assertEqual(#step{}, new_step()),
+      ?_assertMatch(#step{ ref = Ref} when is_reference(Ref), new_step()),
       ?_assertEqual(#operation{}, new_operation()),
       ?_assertEqual(#transaction{ name = test }, name_transaction(test, new_transaction())),
       ?_assertEqual(#transaction{ name = baz, steps = [ TestStep1, TestStep2 ] }, new_transaction(baz, [ TestStep1, TestStep2 ]))
