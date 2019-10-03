@@ -217,7 +217,7 @@ loop(Mref, Pid, TRef, State, NormalExitRcvd) ->
             ?log(info, "Step sent complete..."),
             demonitor(Mref, [flush]), %% prevent us from getting any spurious failures and clean out our mailbox
             self() ! race_conditions_are_bad_mmmkay,
-            erlang:cancel_timer(TRef, [{async, true}]),
+            erlang:cancel_timer(TRef, [{async, true}, {info, false}]),
             loop(Mref, Pid, undef, NewState, true);
         {checkpoint, NewState} ->
             ?log(debug, "Got a checkpoint state"),
@@ -229,7 +229,7 @@ loop(Mref, Pid, TRef, State, NormalExitRcvd) ->
         {'DOWN', Mref, process, Pid, Reason} ->
             %% We crashed for some reason
             ?log(error, "Pid ~p failed because ~p", [Pid, Reason]),
-            erlang:cancel_timer(TRef, [{async, true}]),
+            erlang:cancel_timer(TRef, [{async, true}, {info, false}]),
             {failed, Reason, State};
         {timeout, TRef, _} ->
             case NormalExitRcvd of
