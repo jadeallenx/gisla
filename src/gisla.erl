@@ -199,7 +199,7 @@ update_step(Step, forward, {Reply, Func, State}) ->
 do_step(Name, Func, State) ->
     {F, Timeout} = make_closure(Func, self(), State),
     {Pid, Mref} = spawn_monitor(fun() -> F() end),
-    ?log(info, "Started pid ~p to execute step ~p", [Pid, Name]),
+    ?log(debug, "Started pid ~p to execute step ~p", [Pid, Name]),
     TRef = erlang:start_timer(Timeout, self(), timeout),
     handle_loop_return(loop(Mref, Pid, TRef, State, false), Func).
 
@@ -214,7 +214,7 @@ loop(Mref, Pid, TRef, State, NormalExitRcvd) ->
             ?log(debug, "Normal exit received, with no failure messages out of order."),
             {ok, normal, State};
         {complete, NewState} ->
-            ?log(info, "Step sent complete..."),
+            ?log(debug, "Step sent complete..."),
             demonitor(Mref, [flush]), %% prevent us from getting any spurious failures and clean out our mailbox
             self() ! race_conditions_are_bad_mmmkay,
             erlang:cancel_timer(TRef, [{async, true}, {info, false}]),
